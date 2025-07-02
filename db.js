@@ -1,17 +1,21 @@
-// app.js
 const sqlite3 = require('sqlite3').verbose();
 
-// Abre la base
-const db = new sqlite3.Database('./miproyecto.db');
-
-// Ejecuta una consulta
-db.serialize(() => {
-  db.run("CREATE TABLE IF NOT EXISTS productos (id INTEGER PRIMARY KEY, nombre TEXT)");
-  db.run("INSERT INTO productos (nombre) VALUES (?)", ['Ejemplo']);
-  db.each("SELECT id, nombre FROM productos", (err, row) => {
-    console.log(`${row.id}: ${row.nombre}`);
-    console.log('Conectado a:', __dirname + '/miproyecto.db');
-  });
+const db = new sqlite3.Database('./miproyecto.db', (err) => {
+  if (err) {
+    console.error('Error al abrir DB:', err.message);
+  } else {
+    db.run('PRAGMA journal_mode = WAL');
+    console.log('Conectado a la base de datos miproyecto.db con modo WAL');
+  }
 });
 
-db.close();
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS combinaciones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  modelo_id TEXT,
+  datos TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+});
+
+module.exports = db;

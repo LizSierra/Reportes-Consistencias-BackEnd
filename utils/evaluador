@@ -1,0 +1,28 @@
+function evaluarVectoresYFuncion(combinacion, definicion) {
+  const contexto = { ...combinacion };
+
+  // Evaluar cada vector
+  definicion.vectores.forEach(v => {
+    try {
+      contexto[v.nombre] = evalCondicion(v.condicion, contexto);
+    } catch (e) {
+      contexto[v.nombre] = null;
+    }
+  });
+
+  // Evaluar función principal
+  let resultado = null;
+  try {
+    resultado = evalCondicion(definicion.funcion, contexto);
+  } catch (e) {
+    resultado = null;
+  }
+
+  return { ...combinacion, ...contexto, resultado };
+}
+
+function evalCondicion(expresion, contexto) {
+  const claves = Object.keys(contexto);
+  const valores = Object.values(contexto);
+  return new Function(...claves, `return ${expresion};`)(...valores);
+}

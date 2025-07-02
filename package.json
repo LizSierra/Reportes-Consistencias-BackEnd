@@ -3,7 +3,8 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "oracledb": "^6.8.0",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "uuid": "^11.1.0"
   },
   "name": "reportes-consistencias-backend",
   "version": "1.0.0",
