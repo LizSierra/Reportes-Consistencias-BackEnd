@@ -1,252 +1,273 @@
-// combinacionesController.js
-const sqlite3 = require('sqlite3').verbose();
-const db = new sqlite3.Database('./mi_base_de_datos.db'); // Ajusta ruta
+const sqlite3 = require("sqlite3").verbose();
+const db = new sqlite3.Database("./miproyecto.db");
 
-/**
- * Genera todas las combinaciones recursivamente
- */
-function generarTodasLasCombinaciones(variables, index = 0, current = {}, result = [], limite = 1000) {
-  if (index === variables.length) {
-    result.push({ ...current });
-    return;
-  }
+const LIMITE = 1000;
 
-  const variable = variables[index];
-  const { nombre, tipo, total, decimales } = variable;
-
-  // Genera valores según tipo
-  let valores = [];
-  switch (tipo.toLowerCase()) {
-    case 'varchar2':
-    case 'char':
-      // Para char y varchar2, genera cadenas 'A', 'B', ... limitado a total
-      const longitud = total || 1;
-      const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      for (let i = 0; i < Math.min(longitud, letras.length); i++) {
-        valores.push(letras[i]);
-      }
-      break;
-
-    case 'number':
-      const max = total || 3;
-      const dec = decimales || 0;
-      const maxNum = Math.pow(10, max) - 1;
-      const incremento = dec > 0 ? 1 / Math.pow(10, dec) : 1;
-      // Limitar máximo valores para evitar exceso
-      for (let n = 0; n <= maxNum && valores.length < 10; n++) {
-        valores.push(parseFloat(n * incremento).toFixed(dec));
-      }
-      break;
-
-    case 'boolean':
-      valores = [true, false];
-      break;
-
-    case 'date':
-      // Fechas fijas para ejemplo
-      valores = ['2025-01-01', '2025-06-01', '2025-12-31'];
-      break;
-
-    default:
-      valores = ['N/A'];
-  }
-
-  for (const val of valores) {
-    if (result.length >= limite) break;
-    current[nombre] = val;
-    generarTodasLasCombinaciones(variables, index + 1, current, result, limite);
-  }
-
-  return result;
+function generarValoresClaveNumero(total) {
+  const max = Number("9".repeat(total)); // Ej: 999 para total=3
+  const maxExcedido = Number("9".repeat(total + 1)); // Ej: 9999 para total=3
+  return [0, max, maxExcedido]; // 🚫 Aquí NO se incluye el 1
 }
 
-/**
- * Evalúa vectores teóricos con reglas condicionales
- * vectores = [{ nombre: "X1", reglas: [ { condiciones: [{variable, operador, valor}], asignacion: valorAsignado } ] }]
- */
-function evaluarVectores(combinacion, vectores) {
+function generarCombinacionesAleatorias(variables, limite = 1000) {
+  const valoresPorVariable = variables.map((variable) => {
+    const { tipo, longitud = 1, total = 1, valor, variablegenerada } = variable;
+    console.log(variable);
+
+    // Si variable no generada y tiene valor definido
+    if (variablegenerada === "NO" && valor) {
+      if (typeof valor === "string" && valor.trim() !== "") {
+        const valoresLimpios = valor
+          .replace(/[()]/g, "") // eliminar paréntesis
+          .split(",")
+          .map((v) => v.trim())
+          .filter((v) => v !== "") // Eliminar entradas vacías
+          .map((v) => {
+            const limpio = v.trim();
+            if (limpio.toUpperCase() === "NULL") return "NULL";
+            if (limpio === "") return ""; // explícito, evita el 0
+            return isNaN(limpio) ? limpio : Number(limpio);
+          });
+
+        if (valoresLimpios.length > 0) return valoresLimpios;
+        // Si quedó vacío, seguimos a generación automática abajo
+      } else if (Array.isArray(valor)) {
+        const valoresLimpios = valor
+          .map((v) => {
+            if (typeof v === "string") {
+              const val = v.trim();
+              return val.toUpperCase() === "NULL"
+                ? "NULL"
+                : isNaN(val)
+                ? val
+                : Number(val);
+            }
+            return v;
+          })
+          .filter((v) => v !== ""); // Evitar vacíos
+        if (valoresLimpios.length > 0) return valoresLimpios;
+      }
+      // Si valor no válido o vacío, se ignora para generar normal
+    }
+
+    // Generación automática normal
+    switch (tipo.toLowerCase()) {
+      case "varchar2":
+      case "char":
+        return ["NULL", "A".repeat(longitud), "A".repeat(longitud + 1)];
+      case "number":
+        return generarValoresClaveNumero(total);
+      case "boolean":
+        return [true, false];
+      case "date":
+        return ["2025-01-01", "2025-06-01", "2025-12-31"];
+      default:
+        return ["N/A"];
+    }
+  });
+
+  // Log para debug
+  console.log("valoresPorVariable:", valoresPorVariable);
+
+  const nombres = variables.map((v) => v?.nombre ?? "");
+  // Log para debug
+  console.log("nombres variables:", nombres);
+
+  const todas = [];
+
+  function backtrack(index = 0, actual = {}) {
+    if (index === variables.length) {
+      todas.push({ ...actual });
+      return;
+    }
+
+    const valores = valoresPorVariable[index];
+    if (!valores || valores.length === 0) {
+      // Si no hay valores para esta variable, se pone valor vacío para evitar bloqueo
+      actual[nombres[index]] = "";
+      backtrack(index + 1, actual);
+      return;
+    }
+
+    for (const val of valores) {
+      actual[nombres[index]] = val;
+      backtrack(index + 1, actual);
+    }
+  }
+
+  backtrack();
+
+  // Mezcla aleatoria
+  for (let i = todas.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [todas[i], todas[j]] = [todas[j], todas[i]];
+  }
+
+  return todas.slice(0, limite);
+}
+
+function evaluarVectores(fila, vectores) {
   const resultado = {};
   for (const vector of vectores) {
-    try {
-      let valorAsignado = null;
-      for (const regla of vector.reglas) {
-        const cumpleTodas = regla.condiciones.every(cond => {
-          const valVariable = combinacion[cond.variable];
-          const valCond = cond.valor;
-
-          // Normalizar valores para comparación si es string/número
-          if (typeof valVariable === 'string' && !isNaN(valVariable)) {
-            // Convertir string numérica a número para comparar
-            return compararNumeros(parseFloat(valVariable), cond.operador, valCond);
-          }
-
-          return comparar(valVariable, cond.operador, valCond);
-        });
-        if (cumpleTodas) {
-          valorAsignado = regla.asignacion;
-          break;
-        }
+    let valor = null;
+    for (const regla of vector.reglas) {
+      const cumple = regla.condiciones.every((cond) => {
+        const a = fila[cond.variable];
+        const b =
+          cond.compararContra === "variable"
+            ? fila[cond.variableComparada]
+            : cond.valor;
+        if (typeof a === "string" && !isNaN(a))
+          return compararNumeros(parseFloat(a), cond.operador, b);
+        return comparar(a, cond.operador, b);
+      });
+      if (cumple) {
+        valor = regla.asignacion;
+        break;
       }
-      resultado[vector.nombre] = valorAsignado;
-    } catch {
-      resultado[vector.nombre] = null;
     }
+    resultado[vector.nombre] = valor;
   }
   return resultado;
 }
 
-function comparar(a, operador, b) {
-  switch (operador) {
-    case '=': return a == b;
-    case '!=': return a != b;
-    case '<': return a < b;
-    case '<=': return a <= b;
-    case '>': return a > b;
-    case '>=': return a >= b;
-    default: return false;
+function comparar(a, op, b) {
+  switch (op) {
+    case "=":
+      return a == b;
+    case "!=":
+      return a != b;
+    case "<":
+      return a < b;
+    case "<=":
+      return a <= b;
+    case ">":
+      return a > b;
+    case ">=":
+      return a >= b;
+    default:
+      return false;
   }
 }
 
-function compararNumeros(a, operador, b) {
-  // a y b pueden ser números o strings numéricos
-  const numB = parseFloat(b);
-  return comparar(a, operador, numB);
+function compararNumeros(a, op, b) {
+  return comparar(a, op, parseFloat(b));
 }
 
-/**
- * Evalúa función direccionamiento dinámica en contexto de fila
- * formula ejemplo: '3 * X1 + X2 + 1'
- */
 function evaluarFuncionDireccionamiento(fila, formula) {
   try {
-    const fn = new Function('fila', `with(fila) { return ${formula}; }`);
+    const fn = new Function("fila", `with(fila) { return ${formula}; }`);
     return fn(fila);
   } catch (e) {
-    console.error('Error evaluando fórmula direccionamiento:', e.message);
+    // console.error("Error evaluando fórmula:", e.message);
     return null;
   }
 }
 
-/**
- * Función simulada para eliminar combinaciones previas en BD
- */
-function eliminarCombinacionesExistentes(modeloId) {
-  return new Promise((resolve, reject) => {
-    // Ajusta la tabla y campos segun tu DB
-    const sql = `DELETE FROM combinaciones WHERE modeloId = ?`;
-    db.run(sql, [modeloId], function (err) {
-      if (err) return reject(err);
-      resolve(true);
-    });
+function aplicarVariablesGeneradas(combinaciones, variables) {
+  const generadas = variables.filter((v) => v.variablegenerada === "SI");
+  return combinaciones.map((comb) => {
+    const nueva = { ...comb };
+    for (const variable of generadas) {
+      const { nombre, tipo, valor } = variable;
+      if (!Array.isArray(valor)) continue;
+      const operandos = valor.map((v) => parseFloat(comb[v]) || 0);
+      let res = null;
+      switch (tipo) {
+        case "SUMA":
+          res = operandos.reduce((a, b) => a + b, 0);
+          break;
+        case "RESTA":
+          res = operandos.reduce((a, b) => a - b);
+          break;
+        case "MULTIPLICA":
+          res = operandos.reduce((a, b) => a * b, 1);
+          break;
+        case "EXTRAE_MAX":
+          res = Math.max(...operandos);
+          break;
+      }
+      nueva[nombre] = res;
+    }
+    return nueva;
   });
 }
 
-/**
- * Función simulada para guardar todas las combinaciones en BD
- */
+function eliminarCombinacionesExistentes(modeloId) {
+  return new Promise((resolve, reject) => {
+    if (!modeloId) return resolve();
+    db.run(`DELETE FROM combinaciones WHERE modeloId = ?`, [modeloId], (err) =>
+      err ? reject(err) : resolve(true)
+    );
+  });
+}
+
 function guardarTodasLasCombinacionesEnBD(modeloId, combinaciones) {
   return new Promise((resolve, reject) => {
     if (!combinaciones.length) return resolve();
-
-    const placeholders = '(?, ?, ?, ?)';
-    // Ajusta tabla y campos segun tu esquema
     const sql = `INSERT INTO combinaciones(modeloId, combinacionJson, datos, createdAt) VALUES (?, ?, ?, datetime('now'))`;
+    const stmt = db.prepare(sql, (err) => err && reject(err));
+    const errores = [];
 
-    const stmt = db.prepare(sql);
-
-    try {
-      for (const fila of combinaciones) {
+    for (const fila of combinaciones) {
+      try {
         const filaJson = JSON.stringify(fila);
-        stmt.run(modeloId, filaJson, fila.F);
+        const direccionamiento =
+          typeof fila.Imagen !== "undefined" ? fila.Imagen : null;
+        stmt.run(
+          modeloId,
+          filaJson,
+          direccionamiento,
+          (err) => err && errores.push(err.message)
+        );
+      } catch (e) {
+        errores.push(e.message);
       }
-      stmt.finalize();
-      resolve();
-    } catch (e) {
-      reject(e);
     }
+
+    stmt.finalize((err) => {
+      if (err || errores.length) return reject(new Error(errores.join("; ")));
+      resolve();
+    });
   });
 }
 
-/**
- * Endpoint principal para generar combinaciones
- */
 exports.generarCombinaciones = async (req, res) => {
   try {
-    const { variables, vectores = [], funcionDireccionamiento, modeloId = null } = req.body;
+    const {
+      variables = [],
+      vectores = [],
+      funcionDireccionamiento,
+      modeloId = null,
+    } = req.body;
 
-    if (!variables || !Array.isArray(variables)) {
-      return res.status(400).json({ error: 'Variables inválidas o faltantes' });
+    if (!Array.isArray(variables)) {
+      return res.status(400).json({ error: "Variables inválidas" });
     }
 
-    const LIMITE = 1000;
-    const combinaciones = generarTodasLasCombinaciones(variables, 0, {}, [], LIMITE);
+    const combinaciones = generarCombinacionesAleatorias(variables, LIMITE);
 
-    if (modeloId) {
-      await eliminarCombinacionesExistentes(modeloId);
-    }
+    if (modeloId) await eliminarCombinacionesExistentes(modeloId);
 
-    // Primero evaluamos vectores teóricos y función direccionamiento
-    let resultadoFinal = combinaciones.map(c => {
+    let resultado = aplicarVariablesGeneradas(combinaciones, variables);
+
+    resultado = resultado.map((c) => {
       const vectoresEvaluados = evaluarVectores(c, vectores);
-      const fila = { ...c, ...vectoresEvaluados };
-      fila['F'] = funcionDireccionamiento ? evaluarFuncionDireccionamiento(fila, funcionDireccionamiento) : null;
-      return fila;
+      return { ...c, ...vectoresEvaluados };
     });
 
-    // Luego aplicamos variables generadas (SUMA, RESTA, etc)
-    resultadoFinal = aplicarVariablesGeneradas(resultadoFinal, variables);
+    resultado = resultado.map((c) => {
+      c["Imagen"] = funcionDireccionamiento
+        ? evaluarFuncionDireccionamiento(c, funcionDireccionamiento)
+        : null;
+      return c;
+    });
 
-    if (modeloId) {
-      await guardarTodasLasCombinacionesEnBD(modeloId, resultadoFinal);
-    }
+    if (modeloId) await guardarTodasLasCombinacionesEnBD(modeloId, resultado);
 
-    res.json({ combinaciones: resultadoFinal });
+    res.json({ combinaciones: resultado });
   } catch (e) {
-    console.error('Error en generarCombinaciones:', e);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error("Error en generarCombinaciones:", e);
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 };
-
-
-
-function aplicarVariablesGeneradas(combinaciones, variables) {
-  const generadas = variables.filter(v => v.variablegenerada === 'SI');
-
-  return combinaciones.map(comb => {
-    const nuevaComb = { ...comb };
-
-    for (const variable of generadas) {
-      const { nombre, tipo, valor } = variable;
-
-      if (!Array.isArray(valor)) continue;
-
-      const operandos = valor.map(varName => {
-        const num = parseFloat(comb[varName]);
-        return isNaN(num) ? 0 : num;
-      });
-
-      let resultado = null;
-
-      switch (tipo) {
-        case 'SUMA':
-          resultado = operandos.reduce((a, b) => a + b, 0);
-          break;
-        case 'RESTA':
-          resultado = operandos.reduce((a, b) => a - b);
-          break;
-        case 'MULTIPLICA':
-          resultado = operandos.reduce((a, b) => a * b, 1);
-          break;
-        case 'EXTRAE_MAX':
-          resultado = Math.max(...operandos);
-          break;
-        default:
-          resultado = null;
-      }
-
-      nuevaComb[nombre] = resultado;
-    }
-
-    return nuevaComb;
-  });
-}
