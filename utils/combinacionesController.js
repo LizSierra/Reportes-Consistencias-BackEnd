@@ -12,7 +12,6 @@ function generarValoresClaveNumero(total) {
 function generarCombinacionesAleatorias(variables, limite = 1000) {
   const valoresPorVariable = variables.map((variable) => {
     const { tipo, longitud = 1, total = 1, valor, variablegenerada } = variable;
-    console.log(variable);
 
     // Si variable no generada y tiene valor definido
     if (variablegenerada === "NO" && valor) {
@@ -65,14 +64,7 @@ function generarCombinacionesAleatorias(variables, limite = 1000) {
         return ["N/A"];
     }
   });
-
-  // Log para debug
-  console.log("valoresPorVariable:", valoresPorVariable);
-
   const nombres = variables.map((v) => v?.nombre ?? "");
-  // Log para debug
-  console.log("nombres variables:", nombres);
-
   const todas = [];
 
   function backtrack(index = 0, actual = {}) {
@@ -110,24 +102,44 @@ function evaluarVectores(fila, vectores) {
   const resultado = {};
   for (const vector of vectores) {
     let valor = null;
+    let reglaOtroCaso = null;
+
     for (const regla of vector.reglas) {
+      // Detectar "Otro caso" por variable especial
+      if (
+        regla.condiciones.length === 1 &&
+        regla.condiciones[0].variable === "__otro__"
+      ) {
+        reglaOtroCaso = regla;
+        continue;
+      }
+
       const cumple = regla.condiciones.every((cond) => {
         const a = fila[cond.variable];
         const b =
           cond.compararContra === "variable"
             ? fila[cond.variableComparada]
             : cond.valor;
+
         if (typeof a === "string" && !isNaN(a))
           return compararNumeros(parseFloat(a), cond.operador, b);
         return comparar(a, cond.operador, b);
       });
+
       if (cumple) {
         valor = regla.asignacion;
         break;
       }
     }
+
+    // Si ninguna regla se cumplió y hay "otro caso", usarlo
+    if (valor === null && reglaOtroCaso) {
+      valor = reglaOtroCaso.asignacion;
+    }
+
     resultado[vector.nombre] = valor;
   }
+
   return resultado;
 }
 
