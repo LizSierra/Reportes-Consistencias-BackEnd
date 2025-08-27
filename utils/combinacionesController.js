@@ -1,101 +1,202 @@
 const sqlite3 = require("sqlite3").verbose();
 const db = new sqlite3.Database("./miproyecto.db");
 
-const LIMITE = 1000;
+const LIMITE_POR_IMAGEN = 10;
+const MAX_INTENTOS_GENERACION = 30000;
+const MAX_INTENTOS_GLOBAL = 150000;
 
-function generarValoresClaveNumero(total) {
-  const max = Number("9".repeat(total)); // Ej: 999 para total=3
-  const maxExcedido = Number("9".repeat(total + 1)); // Ej: 9999 para total=3
-  return [0, max, maxExcedido]; // 🚫 Aquí NO se incluye el 1
+function generarValoresClaveNumero(total, decimales = 0) {
+  const maxEntero = Math.pow(10, total) - 1; // Ej: 999 si total=3
+  const maxExcedido = Math.pow(10, total + 1) - 1; // Ej: 9999 si total=3
+  const factor = Math.pow(10, decimales);
+
+  function formatear(num) {
+    return Number((Math.floor(num * factor) / factor).toFixed(decimales));
+  }
+
+  return [
+    formatear(0),
+    formatear(maxEntero + (factor - 1) / factor), // Ej: 999.99
+    formatear(maxExcedido + (factor - 1) / factor), // Ej: 9999.99
+  ];
 }
 
-function generarCombinacionesAleatorias(variables, limite = 1000) {
-  const valoresPorVariable = variables.map((variable) => {
-    const { tipo, longitud = 1, total = 1, valor, variablegenerada } = variable;
+function generarValoresParaVariable(variable) {
+  const {
+    tipo,
+    longitud = 1,
+    total = 1,
+    decimales = 0,
+    valor,
+    variablegenerada,
+  } = variable;
 
-    // Si variable no generada y tiene valor definido
-    if (variablegenerada === "NO" && valor) {
-      if (typeof valor === "string" && valor.trim() !== "") {
-        const valoresLimpios = valor
-          .replace(/[()]/g, "") // eliminar paréntesis
-          .split(",")
-          .map((v) => v.trim())
-          .filter((v) => v !== "") // Eliminar entradas vacías
-          .map((v) => {
-            const limpio = v.trim();
-            if (limpio.toUpperCase() === "NULL") return "NULL";
-            if (limpio === "") return ""; // explícito, evita el 0
-            return isNaN(limpio) ? limpio : Number(limpio);
-          });
+  if (variablegenerada === "NO" && valor) {
+    if (typeof valor === "string" && valor.trim() !== "") {
+      const valoresLimpios = valor
+        .replace(/[()]/g, "")
+        .split(",")
+        .map((v) => v.trim())
+        .filter((v) => v !== "")
+        .map((v) => {
+          const limpio = v.trim();
+          if (limpio.toUpperCase() === "NULL") return "NULL";
+          if (limpio === "") return "";
+          return isNaN(limpio) ? limpio : Number(limpio);
+        });
 
-        if (valoresLimpios.length > 0) return valoresLimpios;
-        // Si quedó vacío, seguimos a generación automática abajo
-      } else if (Array.isArray(valor)) {
-        const valoresLimpios = valor
-          .map((v) => {
-            if (typeof v === "string") {
-              const val = v.trim();
-              return val.toUpperCase() === "NULL"
-                ? "NULL"
-                : isNaN(val)
-                ? val
-                : Number(val);
-            }
-            return v;
-          })
-          .filter((v) => v !== ""); // Evitar vacíos
-        if (valoresLimpios.length > 0) return valoresLimpios;
+      if (valoresLimpios.length > 0) return valoresLimpios;
+    } else if (Array.isArray(valor)) {
+      const valoresLimpios = valor
+        .map((v) => {
+          if (typeof v === "string") {
+            const val = v.trim();
+            return val.toUpperCase() === "NULL"
+              ? "NULL"
+              : isNaN(val)
+              ? val
+              : Number(val);
+          }
+          return v;
+        })
+        .filter((v) => v !== "");
+      if (valoresLimpios.length > 0) return valoresLimpios;
+    }
+  }
+
+  switch (tipo.toLowerCase()) {
+    case "varchar2":
+    case "char":
+      return ["NULL", "A".repeat(longitud), "A".repeat(longitud + 1)];
+    case "number":
+      return generarValoresClaveNumero(total, decimales);
+    case "boolean":
+      return [true, false];
+    case "date":
+      return ["2025-01-01", "2025-06-01", "2025-12-31"];
+    default:
+      return ["N/A"];
+  }
+}
+
+function balancearCerosEnVariablesBase(combinaciones, variables, limite) {
+  const porcentajeCeros = 0.05; // 5% combinaciones con ceros
+  const cantidadForzarCerosPorVariable = Math.max(
+    1,
+    Math.floor(limite * porcentajeCeros)
+  );
+  const cantidadForzarNoCeroPorVariable = Math.max(
+    1,
+    Math.floor(limite * porcentajeCeros)
+  );
+
+  const generadas = variables.filter((v) => v.variablegenerada === "SI");
+
+  for (const variableGenerada of generadas) {
+    const operandos = variableGenerada.valor;
+    if (!Array.isArray(operandos) || operandos.length === 0) continue;
+
+    // Forzar ceros en variables base
+    const indicesSetCeros = new Set();
+    while (
+      indicesSetCeros.size < cantidadForzarCerosPorVariable &&
+      indicesSetCeros.size < combinaciones.length
+    ) {
+      indicesSetCeros.add(Math.floor(Math.random() * combinaciones.length));
+    }
+    for (const idx of indicesSetCeros) {
+      for (const varBase of operandos) {
+        if (combinaciones[idx].hasOwnProperty(varBase)) {
+          const varDef = variables.find((v) => v.nombre === varBase);
+          if (!varDef) continue;
+
+          const tipoVar = varDef.tipo.toLowerCase();
+          if (tipoVar === "number") {
+            combinaciones[idx][varBase] = 0;
+          } else if (tipoVar === "varchar2" || tipoVar === "char") {
+            combinaciones[idx][varBase] = "NULL";
+          } else if (tipoVar === "boolean") {
+            combinaciones[idx][varBase] = false;
+          } else if (tipoVar === "date") {
+            combinaciones[idx][varBase] = null;
+          } else {
+            combinaciones[idx][varBase] = 0;
+          }
+        }
       }
-      // Si valor no válido o vacío, se ignora para generar normal
     }
 
-    // Generación automática normal
-    switch (tipo.toLowerCase()) {
-      case "varchar2":
-      case "char":
-        return ["NULL", "A".repeat(longitud), "A".repeat(longitud + 1)];
-      case "number":
-        return generarValoresClaveNumero(total);
-      case "boolean":
-        return [true, false];
-      case "date":
-        return ["2025-01-01", "2025-06-01", "2025-12-31"];
-      default:
-        return ["N/A"];
-    }
-  });
-  const nombres = variables.map((v) => v?.nombre ?? "");
-  const todas = [];
+    // Forzar valores no ceros en variables base
+    for (const varBase of operandos) {
+      const varDef = variables.find((v) => v.nombre === varBase);
+      if (!varDef) continue;
 
-  function backtrack(index = 0, actual = {}) {
-    if (index === variables.length) {
-      todas.push({ ...actual });
-      return;
-    }
+      const valoresValidos = [];
 
-    const valores = valoresPorVariable[index];
-    if (!valores || valores.length === 0) {
-      // Si no hay valores para esta variable, se pone valor vacío para evitar bloqueo
-      actual[nombres[index]] = "";
-      backtrack(index + 1, actual);
-      return;
-    }
+      if (varDef.variablegenerada === "NO" && varDef.valor) {
+        if (typeof varDef.valor === "string" && varDef.valor.trim() !== "") {
+          valoresValidos.push(
+            ...varDef.valor
+              .replace(/[()]/g, "")
+              .split(",")
+              .map((v) => v.trim())
+              .filter(
+                (v) => v !== "" && v.toUpperCase() !== "NULL" && v !== "0"
+              )
+              .map((v) => (isNaN(v) ? v : Number(v)))
+          );
+        } else if (Array.isArray(varDef.valor)) {
+          valoresValidos.push(
+            ...varDef.valor.filter(
+              (v) =>
+                v !== "" &&
+                v !== 0 &&
+                v !== "0" &&
+                v !== null &&
+                v.toString().toUpperCase() !== "NULL"
+            )
+          );
+        }
+      }
 
-    for (const val of valores) {
-      actual[nombres[index]] = val;
-      backtrack(index + 1, actual);
+      if (valoresValidos.length === 0) {
+        switch (varDef.tipo.toLowerCase()) {
+          case "varchar2":
+          case "char":
+            valoresValidos.push("A".repeat(varDef.longitud || 1));
+            break;
+          case "number":
+            valoresValidos.push(1);
+            break;
+          case "boolean":
+            valoresValidos.push(true);
+            break;
+          case "date":
+            valoresValidos.push("2025-06-01");
+            break;
+          default:
+            valoresValidos.push("X");
+            break;
+        }
+      }
+
+      const indicesSetNoCero = new Set();
+      while (
+        indicesSetNoCero.size < cantidadForzarNoCeroPorVariable &&
+        indicesSetNoCero.size < combinaciones.length
+      ) {
+        indicesSetNoCero.add(Math.floor(Math.random() * combinaciones.length));
+      }
+
+      for (const idx of indicesSetNoCero) {
+        if (combinaciones[idx].hasOwnProperty(varBase)) {
+          const valNoCero =
+            valoresValidos[Math.floor(Math.random() * valoresValidos.length)];
+          combinaciones[idx][varBase] = valNoCero;
+        }
+      }
     }
   }
-
-  backtrack();
-
-  // Mezcla aleatoria
-  for (let i = todas.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [todas[i], todas[j]] = [todas[j], todas[i]];
-  }
-
-  return todas.slice(0, limite);
 }
 
 function evaluarVectores(fila, vectores) {
@@ -105,7 +206,6 @@ function evaluarVectores(fila, vectores) {
     let reglaOtroCaso = null;
 
     for (const regla of vector.reglas) {
-      // Detectar "Otro caso" por variable especial
       if (
         regla.condiciones.length === 1 &&
         regla.condiciones[0].variable === "__otro__"
@@ -132,7 +232,6 @@ function evaluarVectores(fila, vectores) {
       }
     }
 
-    // Si ninguna regla se cumplió y hay "otro caso", usarlo
     if (valor === null && reglaOtroCaso) {
       valor = reglaOtroCaso.asignacion;
     }
@@ -171,7 +270,6 @@ function evaluarFuncionDireccionamiento(fila, formula) {
     const fn = new Function("fila", `with(fila) { return ${formula}; }`);
     return fn(fila);
   } catch (e) {
-    // console.error("Error evaluando fórmula:", e.message);
     return null;
   }
 }
@@ -244,6 +342,122 @@ function guardarTodasLasCombinacionesEnBD(modeloId, combinaciones) {
   });
 }
 
+async function generarCombinacionesConCoberturaCompleta({
+  variables,
+  vectores,
+  funcionDireccionamiento,
+  modeloId = null,
+  limitePorImagen = LIMITE_POR_IMAGEN,
+  maxIntentosPorRonda = MAX_INTENTOS_GENERACION,
+  maxIntentosGlobal = MAX_INTENTOS_GLOBAL,
+  imagenesEsperadas = null,
+}) {
+  const valoresPorVariable = variables.map(generarValoresParaVariable);
+  const nombres = variables.map((v) => v?.nombre ?? "");
+
+  const imagenesContador = {};
+  const combinacionesSet = new Set();
+  let combinacionesFinales = [];
+
+  let intentosGlobal = 0;
+
+  function generarRonda() {
+    const combinacionesRonda = [];
+    let intentos = 0;
+
+    while (
+      intentos < maxIntentosPorRonda &&
+      intentosGlobal < maxIntentosGlobal
+    ) {
+      const nuevaComb = {};
+      for (let i = 0; i < variables.length; i++) {
+        const valores = valoresPorVariable[i];
+        const val = valores[Math.floor(Math.random() * valores.length)];
+        nuevaComb[nombres[i]] = val;
+      }
+
+      const keyBase = JSON.stringify(nuevaComb);
+      if (combinacionesSet.has(keyBase)) {
+        intentos++;
+        intentosGlobal++;
+        continue;
+      }
+
+      combinacionesSet.add(keyBase);
+      combinacionesRonda.push(nuevaComb);
+
+      intentos++;
+      intentosGlobal++;
+    }
+
+    return combinacionesRonda;
+  }
+
+  while (intentosGlobal < maxIntentosGlobal) {
+    let nuevasComb = generarRonda();
+
+    balancearCerosEnVariablesBase(nuevasComb, variables, nuevasComb.length);
+
+    nuevasComb = aplicarVariablesGeneradas(nuevasComb, variables);
+
+    nuevasComb = nuevasComb.map((c) => {
+      const vectoresEvaluados = evaluarVectores(c, vectores);
+      return { ...c, ...vectoresEvaluados };
+    });
+
+    nuevasComb = nuevasComb.map((c) => {
+      c["Imagen"] = funcionDireccionamiento
+        ? evaluarFuncionDireccionamiento(c, funcionDireccionamiento)
+        : null;
+      return c;
+    });
+
+    const combinacionesFiltradas = [];
+    for (const c of nuevasComb) {
+      const img = c["Imagen"];
+      if (imagenesEsperadas && !imagenesEsperadas.includes(img)) continue;
+
+      if ((imagenesContador[img] || 0) < limitePorImagen) {
+        combinacionesFiltradas.push(c);
+        imagenesContador[img] = (imagenesContador[img] || 0) + 1;
+      }
+    }
+
+    combinacionesFinales = combinacionesFinales.concat(combinacionesFiltradas);
+
+    if (imagenesEsperadas) {
+      const todasCubiertas = imagenesEsperadas.every(
+        (img) => (imagenesContador[img] || 0) >= limitePorImagen
+      );
+      if (todasCubiertas) break;
+    } else {
+      if (intentosGlobal >= maxIntentosGlobal) break;
+    }
+  }
+
+  if (modeloId) {
+    await eliminarCombinacionesExistentes(modeloId);
+    await guardarTodasLasCombinacionesEnBD(modeloId, combinacionesFinales);
+  }
+
+  const imagenesEncontradas = Object.entries(imagenesContador).map(
+    ([imagen, count]) => ({ imagen, count })
+  );
+
+  let imagenesFaltantes = [];
+  if (imagenesEsperadas) {
+    imagenesFaltantes = imagenesEsperadas.filter(
+      (img) => (imagenesContador[img] || 0) < limitePorImagen
+    );
+  }
+
+  return {
+    combinaciones: combinacionesFinales,
+    imagenesEncontradas,
+    imagenesFaltantes,
+  };
+}
+
 exports.generarCombinaciones = async (req, res) => {
   try {
     const {
@@ -251,33 +465,24 @@ exports.generarCombinaciones = async (req, res) => {
       vectores = [],
       funcionDireccionamiento,
       modeloId = null,
+      limitePorImagen = LIMITE_POR_IMAGEN,
+      imagenesEsperadas = null,
     } = req.body;
 
     if (!Array.isArray(variables)) {
       return res.status(400).json({ error: "Variables inválidas" });
     }
 
-    const combinaciones = generarCombinacionesAleatorias(variables, LIMITE);
-
-    if (modeloId) await eliminarCombinacionesExistentes(modeloId);
-
-    let resultado = aplicarVariablesGeneradas(combinaciones, variables);
-
-    resultado = resultado.map((c) => {
-      const vectoresEvaluados = evaluarVectores(c, vectores);
-      return { ...c, ...vectoresEvaluados };
+    const resultado = await generarCombinacionesConCoberturaCompleta({
+      variables,
+      vectores,
+      funcionDireccionamiento,
+      modeloId,
+      limitePorImagen,
+      imagenesEsperadas,
     });
 
-    resultado = resultado.map((c) => {
-      c["Imagen"] = funcionDireccionamiento
-        ? evaluarFuncionDireccionamiento(c, funcionDireccionamiento)
-        : null;
-      return c;
-    });
-
-    if (modeloId) await guardarTodasLasCombinacionesEnBD(modeloId, resultado);
-
-    res.json({ combinaciones: resultado });
+    res.json(resultado);
   } catch (e) {
     console.error("Error en generarCombinaciones:", e);
     res.status(500).json({ error: "Error interno del servidor" });
